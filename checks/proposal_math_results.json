@@ -1,0 +1,276 @@
+{
+  "checks_passed": 54,
+  "numpy": "2.2.6",
+  "checks": [
+    {
+      "name": "full gradient theta=-2.0 c=-1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "marginal gradient theta=-2.0 c=-1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "masked bias theta=-2.0 c=-1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "full gradient theta=-2.0 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "marginal gradient theta=-2.0 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "masked bias theta=-2.0 c=0.0",
+      "actual": -0.0,
+      "expected": -0.0
+    },
+    {
+      "name": "full gradient theta=-2.0 c=0.25",
+      "actual": 0.24999999999999997,
+      "expected": 0.25
+    },
+    {
+      "name": "marginal gradient theta=-2.0 c=0.25",
+      "actual": 0.25,
+      "expected": 0.25
+    },
+    {
+      "name": "masked bias theta=-2.0 c=0.25",
+      "actual": -0.24999999999999997,
+      "expected": -0.25
+    },
+    {
+      "name": "full gradient theta=-2.0 c=1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "marginal gradient theta=-2.0 c=1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "masked bias theta=-2.0 c=1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "full gradient theta=0.0 c=-1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "marginal gradient theta=0.0 c=-1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "masked bias theta=0.0 c=-1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "full gradient theta=0.0 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "marginal gradient theta=0.0 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "masked bias theta=0.0 c=0.0",
+      "actual": -0.0,
+      "expected": -0.0
+    },
+    {
+      "name": "full gradient theta=0.0 c=0.25",
+      "actual": 0.25,
+      "expected": 0.25
+    },
+    {
+      "name": "marginal gradient theta=0.0 c=0.25",
+      "actual": 0.25,
+      "expected": 0.25
+    },
+    {
+      "name": "masked bias theta=0.0 c=0.25",
+      "actual": -0.25,
+      "expected": -0.25
+    },
+    {
+      "name": "full gradient theta=0.0 c=1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "marginal gradient theta=0.0 c=1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "masked bias theta=0.0 c=1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "full gradient theta=0.7 c=-1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "marginal gradient theta=0.7 c=-1.0",
+      "actual": -1.0000000000000002,
+      "expected": -1.0
+    },
+    {
+      "name": "masked bias theta=0.7 c=-1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "full gradient theta=0.7 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "marginal gradient theta=0.7 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "masked bias theta=0.7 c=0.0",
+      "actual": -0.0,
+      "expected": -0.0
+    },
+    {
+      "name": "full gradient theta=0.7 c=0.25",
+      "actual": 0.25000000000000006,
+      "expected": 0.25
+    },
+    {
+      "name": "marginal gradient theta=0.7 c=0.25",
+      "actual": 0.25000000000000006,
+      "expected": 0.25
+    },
+    {
+      "name": "masked bias theta=0.7 c=0.25",
+      "actual": -0.25000000000000006,
+      "expected": -0.25
+    },
+    {
+      "name": "full gradient theta=0.7 c=1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "marginal gradient theta=0.7 c=1.0",
+      "actual": 1.0000000000000002,
+      "expected": 1.0
+    },
+    {
+      "name": "masked bias theta=0.7 c=1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "full gradient theta=2.0 c=-1.0",
+      "actual": -0.9999999999999999,
+      "expected": -1.0
+    },
+    {
+      "name": "marginal gradient theta=2.0 c=-1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "masked bias theta=2.0 c=-1.0",
+      "actual": 0.9999999999999999,
+      "expected": 1.0
+    },
+    {
+      "name": "full gradient theta=2.0 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "marginal gradient theta=2.0 c=0.0",
+      "actual": 0.0,
+      "expected": 0.0
+    },
+    {
+      "name": "masked bias theta=2.0 c=0.0",
+      "actual": -0.0,
+      "expected": -0.0
+    },
+    {
+      "name": "full gradient theta=2.0 c=0.25",
+      "actual": 0.24999999999999997,
+      "expected": 0.25
+    },
+    {
+      "name": "marginal gradient theta=2.0 c=0.25",
+      "actual": 0.25,
+      "expected": 0.25
+    },
+    {
+      "name": "masked bias theta=2.0 c=0.25",
+      "actual": -0.24999999999999997,
+      "expected": -0.25
+    },
+    {
+      "name": "full gradient theta=2.0 c=1.0",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "marginal gradient theta=2.0 c=1.0",
+      "actual": 1.0000000000000002,
+      "expected": 1.0
+    },
+    {
+      "name": "masked bias theta=2.0 c=1.0",
+      "actual": -1.0,
+      "expected": -1.0
+    },
+    {
+      "name": "terminal omitted score",
+      "actual": -5.551115123125783e-17,
+      "expected": 0.0
+    },
+    {
+      "name": "scale-only omitted score with squared reward",
+      "actual": 2.9836493952825425,
+      "expected": 2.9836493952825407
+    },
+    {
+      "name": "parameter-independent nuisance; retained conditional score",
+      "actual": 1.4000000000000008,
+      "expected": 1.4
+    },
+    {
+      "name": "unclipped nuisance ratio expectation",
+      "actual": 1.0,
+      "expected": 1.0
+    },
+    {
+      "name": "full clipped objective",
+      "actual": 0.7,
+      "expected": 0.7
+    },
+    {
+      "name": "reduced clipped objective",
+      "actual": 1.0,
+      "expected": 1.0
+    }
+  ]
+}
