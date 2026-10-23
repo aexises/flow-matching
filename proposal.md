@@ -30,6 +30,16 @@ Other missing context includes [McAllister et al., *Flow Matching Policy Gradien
 
 **Candidate contribution:** a verified validity boundary for coordinate masks in a pinned SmolVLA sampler, separating intermediate padding, temporal suffixes, and final discarded outputs, plus replicated evidence about gradient estimates and learning. No exact duplicate of that full study was identified in the sources inspected; originality is not established by search absence. See [the audit](proposal_audit.md) for source scope and limitations.
 
+### Streaming Flow Policy: related representation, distinct RL question
+
+[Jiang et al., *Streaming Flow Policy* (CoRL 2025), arXiv v2](https://arxiv.org/html/2505.21851v2) learns imitation policies whose flow time follows execution time. Appendix B introduces coupled action and auxiliary latent variables. Section 9 distinguishes per-time marginals from trajectory joint distributions. This is related representation-level work, not an analysis of our likelihood masks. Its deterministic transitions do not directly supply the positive-variance Gaussian conditionals assumed here. Review scope: full text, §§1–9 and Appendices A–E; inspected 23 October 2026.
+
+**Proposed reuse (our extension, not a result of that paper):** use the auxiliary-variable construction as inspiration for a small stochastic control problem with explicitly defined positive transition variances. Sweep coupling from omitted latent variables into executed coordinates, including a zero-coupling control. Compare full-path scores, masked scores, and a tractable exact-marginal reference before clipping; then evaluate clipping separately. Merely perturbing a parameter-independent initial latent does not demonstrate omitted-score bias. The test must include parameter-dependent omitted transition factors and verify a nonzero reward-weighted omitted score. Treat this as a new diagnostic implementation requiring validation, not as an existing SFP result or a proven SmolVLA defect.
+
+Add a low-cost execution-horizon sweep to the diagnostic phase, keeping denoising depth fixed. Measure temporal-prefix and padded-dimension masks separately, with interaction counts and chunk discounting handled consistently. If deployment latency is reported, distinguish time to first action from amortized time per action. These diagnostic extensions do not add full training arms to the initial 24-run budget.
+
+A streaming SmolVLA action head would be a separate architecture/training intervention. It would require demonstration preprocessing, a compatible action representation, and a new RL likelihood derivation. Defer that direction until the primary masking study is complete; it cannot serve as an isolated mask ablation.
+
 ## Research questions
 
 1. Which omitted latent variables have a causal influence on the executed action, and which of their sampling distributions depend on trainable parameters?
