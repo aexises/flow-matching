@@ -140,60 +140,308 @@ $$
 
 Dropping the score of $U$ and rescoring only $p(Y\mid U)$ with stored $U$ detached produces zero gradient. At $c=0$, masking is harmless; for nonzero $c$, it is biased. Positive, negative, and zero coupling cases are checked by [the numerical audit](checks/proposal_math.py). The exact executed-action marginal is $Y\sim\mathcal{N}(c\theta,1+c^2)$; its score $c(Y-c\theta)/(1+c^2)$ also gives gradient $c$. This illustrates correct marginalization, which differs from retaining only the conditional density with detached $U$. This demonstrates a possible failure mechanism, not an observed SmolVLA failure.
 
-## Experimental design
+## Experimental methodology and execution plan
 
-### Phase 1: model and sampler dependency audit
+**Protocol revision: 23 October 2026.** This is a prospective protocol, not a report of completed robot experiments. Existing numerical checks validate limited analytical examples only. The streaming-policy connection motivates additional diagnostics; the primary experiment remains a fixed-sampler comparison of likelihood treatments on SmolVLA. Proposed numerical settings below are starting settings to be finalized on development data, not measured resource requirements or literature-established optima.
 
-Pin the checkpoint, LeRobot revision, simulator version, preprocessing, normalization, action horizon, and trainable parameter set. Begin with synchronous execution and a fixed execution horizon.
+### 1. Questions, hypotheses, and units of evidence
 
-For representative observations and each denoising time, perturb omitted latent coordinates and measure changes in the eventual executed action. Audit padded dimensions and future temporal positions separately. Use finite differences and directional derivatives without constructing the full Jacobian. Check whether the corresponding omitted transition parameters depend on the trainable modules. Audit the mean and variance networks separately: a scale can depend on an omitted coordinate even when the mean does not. Hold future base-noise draws fixed for pathwise sensitivity probes, and supplement them with distributional and reward-weighted score diagnostics.
+The study separates three questions that require different evidence:
 
-Use zero perturbation and causally isolated variables as negative controls. Repeat across perturbation magnitudes to separate numerical noise from meaningful dependence. A large output sensitivity is a diagnostic, not by itself proof of nonzero expected gradient bias.
+| Question | Testable hypothesis | Evidence required | Insufficient evidence |
+|---|---|---|---|
+| Computational dependence | Some omitted intermediate coordinates affect the distribution of executed actions. | Architecture inspection, controlled interventions, and mean/scale sensitivity tests. | A dense layer, tensor shape, or shared parameters alone. |
+| Gradient validity | For some parameter-dependent omitted factors, the expected reward-weighted score is nonzero. | Exact-gradient controlled examples; on-policy estimates with uncertainty in the actual sampler. | A single-batch gradient difference or nonzero action sensitivity alone. |
+| Learning consequences | Changing the likelihood treatment changes learning under a matched budget. | Replicated training runs and evaluation, with uncertainty and failures reported. | A toy counterexample or better performance at one selected checkpoint. |
 
-**Decision gate:** proceed with masking as the main paper only if omitted, parameter-dependent variables have measurable downstream influence. If the actual computation graph excludes that influence, document the valid reduction and narrow the proposed claim.
+The direction of the learning effect is not predetermined. Retaining more score terms can remove masking bias but increase variance, alter clipping, and worsen optimization. Stochastic-policy gradient validity also does not guarantee improvement of a different ODE deployment policy.
 
-### Phase 2: gradient analysis on controlled models
+The units of analysis are: an independent latent trajectory in fixed-context diagnostics; an independent environment episode for return estimation; and an independently trained policy for learning comparisons. Different denoising steps, task episodes, or checkpoints from the same training run are not independent training replications.
 
-Construct small stochastic flow policies where expected-reward gradients can be checked by quadrature or controlled finite differences. Compare complete-path and masked estimators on the same sampled trajectories.
+### 2. Freeze the experimental contract before comparison
 
-Measure gradient bias, variance, mean-squared error, and agreement with the reference direction. Include one-step and multi-step cases, zero and nonzero coupling, parameter-independent omitted dynamics, and small positive variances. Treat zero variance as a deterministic transition requiring different mathematics, rather than inserting it into a Gaussian log-density.
+Create a versioned configuration manifest before any confirmatory run:
 
-First compare unclipped estimators. Then introduce PPO-style clipping to distinguish bias caused by masking from changes caused by nonlinear clipping.
+- Exact SmolVLA checkpoint, download revision and checksum; LeRobot and sampler Git commits; local patches; Python, PyTorch, CUDA, driver and simulator versions.
+- Observation cameras, resolutions, frame history, language prompts, state representation, action order, normalization, clipping and gripper handling.
+- Generated horizon $H$, physical action dimension $d$, padded dimension $D$, execution horizon $h$, integration grid and denoising depth $K$. Read these from the actual configuration; do not assume defaults.
+- Full transition equations, which steps are stochastic, noise floors/ceilings, and the mean and scale parameterizations. Include endpoint handling and any terminal deterministic step.
+- Trainable parameter names and counts, frozen modules, adapters if any, critic inputs/architecture, optimizer groups, learning rates, precision and gradient accumulation.
+- Simulator task lists, reward definition, reset-state pools, episode limits, success predicate, discount convention and termination/truncation handling.
+- Independent random streams for model initialization, task/reset selection, sampler noise, action evaluation and minibatch shuffling.
 
-### Phase 3: controlled SmolVLA fine-tuning
+Use synchronous collection and a fixed planned execution horizon in the primary study. Disable asynchronous queues, dynamic horizons and parameter-dependent action filters unless they are explicitly modeled. Freeze normalization statistics and disable training-time dropout during likelihood rescoring, or account for the corresponding randomness in the policy definition. Trainable observation features must be recomputed for the current policy; an old cached feature is valid only when its producing modules are frozen.
 
-Use one shared PPO implementation and critic. Compare a $2\times2$ design:
+Use the same trainable backbone subset in the two samplers wherever possible. Flow-Noise-specific scale parameters remain part of its declared policy, so cross-sampler differences cannot be attributed solely to the mathematical source of noise. The primary causal contrast is the likelihood intervention *within* each sampler.
 
-| Sampler | Complete-path likelihood | Masked likelihood |
+### 3. Define masks explicitly
+
+Flatten each latent tensor's coordinates into $j=1,\ldots,HD$. Define a fixed binary mask $m_{k,j}$ for each stochastic transition, with $k=0,\ldots,K-1$. Let $\mathcal{D}$ select physical dimensions at all generated time positions, $\mathcal{T}$ select the planned executed prefix across all dimensions, and $\mathcal{E}=\mathcal{D}\cap\mathcal{T}$ select executed physical coordinates.
+
+| ID | Retained score factors | Purpose |
 |---|---|---|
-| Flow-Noise | All stochastic transition coordinates | Current physical-coordinate/executed-prefix mask |
-| Full-chain Flow-SDE | All stochastic transition coordinates | Same mask rule |
+| FULL | Every coordinate at every stochastic transition. | Reference augmented-policy score. |
+| DIM | $j\in\mathcal{D}$ at every transition. | Isolate removal of padded dimensions. |
+| TIME | $j\in\mathcal{T}$ at every transition. | Isolate removal of future temporal positions. |
+| BOTH | $j\in\mathcal{E}$ at every transition. | Combined physical-coordinate/prefix mask. |
+| FINAL | All coordinates for $k<K-1$; only $\mathcal{E}$ at the final stochastic transition, provided it directly produces the selected output. | Unclipped negative control under diagonal final transitions and the stated reward assumptions. |
+| REDUCED | Factors of a separately derived normalized marginal or autonomous retained process. | Exact reference where analytically available; never assume arbitrary masking implements it. |
 
-Within each sampler pair, preserve the rollout sampler, transition scales, initialization, reward, trainable parameters, optimizer, and interaction budget. The likelihood treatment is the intervention. Use shared batches for local gradient diagnostics; full training runs will diverge after updates and should not be described as sharing identical rollout data.
+The primary training matrix uses FULL and BOTH. DIM, TIME, FINAL and REDUCED belong first to toy and matched-batch diagnostics. Additional full training arms require a written budget amendment. If the pinned reference implementation uses a different mask, name and document that treatment instead of calling BOTH its exact reproduction.
 
-Use summed log-densities for full joint-path PPO ratios and the corresponding masked surrogates for the primary comparison, identifying any departure from released reference recipes. Separately test per-transition clipping if needed to connect the result to existing implementations. Hybrid ODE–SDE sampling is an optional extension because deterministic steps introduce additional gradient and support questions.
+Masks here are likelihood masks. They do not zero sampler coordinates, alter attention, suppress noise, or change commands sent to the environment. Such changes modify the policy and are separate interventions.
 
-Add a terminal-only mask as a mathematical control in the toy and matched-batch audits; it is not an additional full training arm in the initial 24-run budget. Its on-policy gradient should agree in expectation with the full estimator under the stated assumptions, although clipped updates can differ. Separate physical-dimension and temporal-prefix masks in those audits before attributing a combined-mask effect.
+### 4. Phase A — implementation and likelihood correctness
 
-Keep SFT without RL and continued SFT as controls. If a reduced-state estimator is proposed, derive its validity before adding it as a treatment. Clamping latent padding, freezing parts of the sampler, or changing attention modifies the policy and must be reported as a distinct intervention.
+**Objective:** establish that the logged trajectory is actually sampled from the distribution being rescored.
 
-### Benchmarks and metrics
+For every transition store the conditioning context, latent parent/output, integration time, old mean and scale or sufficient data to reproduce them, old coordinatewise log-probabilities, mask metadata and policy revision. Store raw pre-clipping latent outputs; clipping or action postprocessing must not silently turn a Gaussian observation into a censored one. Parameter-independent command transforms may be absorbed into the reward/environment map for augmented-policy analysis; distinguish this from claiming a Gaussian command density.
 
-Use LIBERO-Object and LIBERO-Spatial initially. Add a horizon-focused extension only after the primary mechanism is established. The primary outcome is **ODE deployment success at a fixed primitive-interaction budget**; report stochastic-sampler success separately.
+Required checks before training:
 
-Secondary measures include learning-curve area, gradient disagreement, clipping fraction, downstream sensitivity, update memory, GPU-hours, and wall time. Record per-task results and all failed training runs.
+1. Recompute old-policy log-probabilities from stored samples. Compare coordinatewise terms and total sums; identical-policy ratios must equal one within calibrated numerical tolerance.
+2. Verify positive finite scales and finite samples, means, log-probabilities and gradients. Verify scale versus variance conventions and every integration-step factor.
+3. Compare analytic Gaussian scores against autodifferentiation and fixed-sample finite differences in float64 toy cases. Test mean-only and scale-only trainable parameters separately.
+4. Hold both sampled parent and output tensors fixed for score differentiation. Preserve gradients through trainable mean/scale networks and observation encoders.
+5. Confirm that mask changes alone leave sampled trajectories, executed commands, rewards and advantages unchanged in a fixed-batch diagnostic.
+6. Test $K=1$, $h=H$, $D=d$, short chunks, true termination, time-limit truncation, all-retained and all-omitted toy masks. Zero-variance transitions must be rejected by the Gaussian scorer, not made valid by a logging-only epsilon.
+7. Check that the variance floor used for sampling is exactly the one used for rescoring. A changed floor changes the sampler and must be logged as such.
 
-Use disjoint development and final evaluation states, not just different seed labels. Fix episode caps, success checks, camera processing, and action scaling. Evaluate methods on matched initial states and control initial-noise randomness. Distinguish trained-task evaluation from unseen-task or perturbation generalization.
+Start with tolerances around $10^{-10}$ for small float64 analytical checks. Set operational tolerances for float32/mixed precision from measured rescoring error and tensor dimension; do not apply a per-coordinate tolerance blindly to a long summed log-density. Run distribution/log-probability arithmetic in adequate precision and form ratios from log-ratios.
 
-## Resources and reproducibility
+**Gate A:** no unexplained rescoring or gradient failures. Archive failures and fixes before accepting pilot results. A sampler with deterministic endpoints must either receive a valid mixed deterministic/stochastic derivation or be explicitly replaced by a positive-variance research variant. That variant is not an exact reproduction of the released recipe.
 
-The working hardware budget is **two L40 GPUs**, subject to a measured memory and throughput pilot. Prefer independent training seeds on separate GPUs when each run fits. Simulator CPU throughput and rendering must be profiled alongside learner speed.
+### 5. Phase B — controlled models with known answers
 
-The primary design requires four RL arms × two suites × three training seeds = **24 runs**. Expanding to five seeds requires 40 runs. SFT controls, tuning, and evaluation are additional costs. Choose the final interaction budget after profiling; no convergence time is assumed.
+#### B1. Preserve the existing scalar reference
 
-Match primitive environment interactions and tuning effort, and report compute separately. For each sampler, estimate the complete-minus-masked difference; then test whether this effect differs between samplers. Account for training-seed variability and, for claims across tasks, task-level clustering. Do not count repeated evaluation episodes as independent training replications.
+Retain the proposal's $U\sim\mathcal{N}(\theta,1)$, $Y\mid U\sim\mathcal{N}(cU,1)$ example. Check positive, negative and zero $c$, multiple $\theta$, the full score, the masked conditional score and the exact marginal score. This verifies a failure mechanism but contains too little structure to substitute for a multi-step VLA experiment.
 
-Before optimization, verify that identical-policy rescoring reproduces per-sample log-densities. Also test action masks, short final chunks, early termination, precision consistency, finite values, positive scales, and gradient flow to the declared parameter set. If primitive-step discounting is used, use the in-chunk reward $\sum_{i=0}^{h_t-1}\gamma^i r_{t+i}$ and bootstrap factor $\gamma^{h_t}$, with bootstrapping disabled at genuine terminal states. Handle time-limit truncation separately.
+#### B2. Add a multi-step action/latent system
+
+Motivated by the auxiliary-variable representation in [Streaming Flow Policy, Appendix B](https://arxiv.org/html/2505.21851v2#A2), define the following **new diagnostic model**, not a reproduction of that paper:
+
+$$
+\begin{aligned}
+x_{k+1}&=\alpha x_k+c u_k+\sigma_x\epsilon^x_k,\\
+u_{k+1}&=\rho u_k+\beta+\sigma_u\epsilon^u_k,
+\end{aligned}
+\qquad \epsilon^x_k,\epsilon^u_k\overset{\mathrm{iid}}{\sim}\mathcal{N}(0,1).
+$$
+
+Only $x_K$ is executed/scored. Set $(x_0,u_0)$ to a parameter-independent Gaussian. Initially let $\beta$ be the only trainable parameter and use $R=x_K$; later allow $\alpha,\rho$ and log-scales to be trained and include $R=x_K^2$. Use finite $K$, strictly positive scales, and begin with $|\alpha|,|\rho|<1$ to avoid conflating masking with unstable dynamics. Fix the start mean/covariance and record all settings.
+
+For $w_k=(x_k,u_k)^T$, define
+
+$$
+A=\begin{bmatrix}\alpha&c\\0&\rho\end{bmatrix},\quad
+b=\begin{bmatrix}0\\\beta\end{bmatrix},\quad
+Q=\operatorname{diag}(\sigma_x^2,\sigma_u^2).
+$$
+
+Compute exact moments recursively:
+
+$$
+\mu_{k+1}=A\mu_k+b,\qquad
+\Sigma_{k+1}=A\Sigma_kA^T+Q.
+$$
+
+Then $\mathbb{E}[x_K]=\mu_{K,x}$ and $\mathbb{E}[x_K^2]=\mu_{K,x}^2+\Sigma_{K,xx}$. Differentiate these recursions for the reference gradient and independently verify with central finite differences over several step sizes. Low-dimensional quadrature provides an additional check where practical; Monte Carlo is for sampling variance, not the definition of ground truth.
+
+An indexing check is essential: with only $\beta$ trainable, $\partial_\beta\mathbb{E}[x_1]=0$ and $\partial_\beta\mathbb{E}[x_2]=c$. The omitted latent transition needs a later step through which to influence execution. Terminal $u_K$ remains irrelevant to this reward under the diagonal transition.
+
+Initial diagnostic grid: $K\in\{1,2,5,10\}$ and $c\in\{0,\pm0.1,\pm0.5,\pm1\}$. Begin with unit noise and then a small set of strictly positive smaller scales. Refine only when needed to resolve a mechanism; this is a lightweight synthetic grid, not a GPU training grid.
+
+#### B3. Controls that can falsify overbroad claims
+
+- **No coupling:** $c=0$. Omitted latent score contributions should vanish in expectation.
+- **Frozen nuisance factors:** hold latent-transition parameters fixed and train only retained dynamics. A latent can influence actions without contributing an omitted trainable score.
+- **Final-only deletion:** omit only discarded final output scores. The mean gradient should agree, although variance and PPO behavior can differ.
+- **Scale-mediated dependence:** include a separate model with $u$ affecting the retained transition's positive scale, e.g. $\sigma_x(u)=\sigma_{\min}+\operatorname{softplus}(s+\lambda u)$. Use a quadratic reward and quadrature or another independently validated reference; the linear-Gaussian moment recursion no longer applies.
+- **Temporal isolation:** build a triangular multi-token model in which later positions cannot affect earlier executed ones, then deliberately add reverse coupling. This distinguishes temporal masking from within-token dimension masking.
+- **Marginal versus conditional:** where the final Gaussian marginal is known, compare its score with the full augmented-path score and the masked score. Do not identify a retained conditional with a marginal.
+
+For each estimator report the vector bias relative to the exact reference, covariance trace, mean-squared error, gradient norm, and directional agreement when both gradients are nonzero. Use independent sampling batches and shared samples across estimators within each batch. Include uncertainty on estimated bias; zero reference gradients require absolute errors, not unstable relative errors or undefined cosine similarities.
+
+**Gate B:** full and exact-marginal estimators agree with the exact expectation within numerical/sampling uncertainty; negative controls behave as predicted; at least one parameter-dependent coupled case shows a reproducible masked-score error. Failure of the full reference blocks interpretation of every mask result.
+
+### 6. Phase C — checkpoint and sampler dependency audit
+
+Construct a development observation bank covering both planned suites, multiple tasks, several episode phases, and available success/failure trajectories. A proposed starting size is 128 contexts across the two suites; enlarge if task/phase coverage is inadequate. Label the source of every context. This bank diagnoses mechanisms and is not final evaluation data.
+
+For each context and denoising index, probe padded dimensions and future temporal positions separately. Perturb only the selected latent coordinates. Reuse future base-noise draws when comparing perturbed and unperturbed trajectories so the response is not dominated by unrelated noise.
+
+For a normalized direction $v$ supported on omitted coordinates, estimate
+
+$$
+D_v F(z_k)\approx\frac{F(z_k+\delta v)-F(z_k-\delta v)}{2\delta},
+$$
+
+where $F$ maps the intermediate latent state to the final executed normalized action, with later base noises fixed. Use JVP/VJP checks where supported. A starting sweep is $\delta\in\{10^{-4},10^{-3},10^{-2}\}$ in normalized coordinates; interpret it against floating-point noise and typical latent scales. Report both normalized and physical action changes after the actual postprocessing.
+
+Audit three paths: omitted coordinate to later retained mean; omitted coordinate to later retained scale; trainable parameter to the omitted transition factor. Inspect the complete computation graph, including scale heads, preprocessing, caches and attention, rather than just the action expert. Output clipping can hide a latent response, so inspect both raw and executed outputs.
+
+Negative controls include zero perturbation, repeated identical inputs, explicit disconnected toy coordinates, and final discarded outputs. If temporal causality is structurally enforced, document the argument and use perturbations as an implementation check. Small derivatives on sampled contexts are evidence of weak local sensitivity, not a proof of independence for all states.
+
+**Gate C:** classify each mask component as structurally justified, empirically coupled, weak/inconclusive, or unsupported because the scorer/sampler assumptions fail. If no omitted trainable factor can influence reward-relevant outputs, do not launch expensive training to hunt for the predicted bias. A useful validity-boundary study may still proceed with a revised question.
+
+### 7. Phase D — matched-batch gradient and PPO diagnostics
+
+#### D1. Separate exact statements from estimators
+
+At a frozen policy revision, collect fresh on-policy stochastic paths. Recompute every mask on the same paths, using the same detached reward or advantage. Define
+
+$$
+S_m=\sum_{k,j}m_{k,j}\nabla_\theta\log q_\theta(z_{k+1,j}\mid z_k,o),
+\qquad
+\widehat{\Delta}_m=\frac1N\sum_{i=1}^{N}A_i\big(S_m^{(i)}-S_{\mathrm{FULL}}^{(i)}\big).
+$$
+
+For the fixed-context objective with $A_i=R_i$, this estimates the masked-minus-full expected gradient. A context-only baseline can be subtracted without changing its expectation under the score assumptions. In closed-loop PPO with approximate GAE, label the result **surrogate-gradient disagreement**, not measured bias against an exact task-return gradient.
+
+Use two diagnostic levels:
+
+- **Score isolation:** fixed observations and a documented parameter-independent diagnostic function of executed actions, such as a quadratic target-tracking score. This tests estimator behavior, not manipulation success.
+- **Task relevance:** simulator trajectories and Monte Carlo returns/advantages under the stochastic behavior policy. Respect policy-gradient return-to-go weighting, chunk timing and episode dependence. Use the full estimator as a theoretically motivated reference under assumptions, not as a noise-free numerical oracle.
+
+For non-differentiable task success, simulator finite differences are not a cheap exact reference. If directional parameter perturbations are used, keep them development-only and report their sampling uncertainty and policy changes explicitly.
+
+Start with several independent batches per context/task stratum and increase samples until confidence intervals are informative or a predefined diagnostic budget is exhausted. Use context/episode clustering as appropriate. Report contributions by denoising step, mask component and parameter group, before and after optimizer gradient clipping. Full parameter vectors may be expensive: accumulate groupwise differences and fixed random projections, explicitly noting that projections cannot establish absence of all bias directions.
+
+A null result with a wide interval is inconclusive. Define a practical resolution threshold from pilot gradient variability and optimizer update scales, freeze it before confirmatory diagnostics, and report whether the interval excludes effects of that size.
+
+#### D2. Probe clipping without conflating it with score bias
+
+First evaluate the unclipped on-policy objective at $\theta=\theta_{\mathrm{old}}$. Then create several small, predeclared parameter displacements and recompute fixed-batch PPO objectives and gradients under each mask. Include the same displacements for all masks, rather than only updates preferred by one treatment.
+
+Log summed log-ratios, ratio quantiles, fraction clipped, gradient norms, overflow/nonfinite events and effective sample size as a weight-concentration diagnostic. Only call a likelihood-ratio KL estimate a policy KL when the densities are actually normalized policies on the same space. A masked surrogate does not automatically have that interpretation.
+
+Compare FINAL against FULL to demonstrate that equal expected unclipped gradients need not imply equal clipped objectives. Mean log-probability normalization and per-transition clipping are optional *separate* treatments; keep them out of the primary summed-path comparison.
+
+#### D3. Execution-horizon diagnostic
+
+Fix $H,D,K$, the checkpoint and transition schedule. Use valid distinct horizons from approximately $\{1,H/4,H/2,H\}$ after integer rounding, retaining the deployment default as well. For pure coordinate-dependence tests, reuse generated paths and change only the projection/mask. For task-return tests, recollect rollouts for each execution horizon because replanning frequency changes the policy/environment trajectory; old returns cannot simply be relabeled.
+
+At each horizon compare DIM, TIME and BOTH against FULL, plus FINAL. This sweep is initially a diagnostic, not a Cartesian expansion of all training runs. Choose at most one additional horizon for an optional confirmatory training ablation after the mechanism is identified.
+
+**Gate D:** either establish a task-relevant omitted-score effect with useful uncertainty, or establish a sufficiently precise validity/variance result that motivates a revised learning question. Numerical dependence alone does not pass this gate. Unresolved support or likelihood errors must be repaired first.
+
+### 8. Phase E — controlled online fine-tuning
+
+#### E1. Primary factorial design
+
+| Arm | Sampler | Likelihood treatment |
+|---|---|---|
+| N-F | Flow-Noise | FULL |
+| N-M | Flow-Noise | BOTH |
+| S-F | Full-chain positive-variance Flow-SDE | FULL |
+| S-M | Full-chain positive-variance Flow-SDE | BOTH |
+
+Use one training code path, changing only the likelihood mask within each sampler pair. Preserve initial weights, initial scale settings, critic initialization, task/reset distribution, interaction budget, optimizer hyperparameters, clipping coefficient, minibatch size, update epochs and evaluation schedule. Initial exploration may differ across sampler families; report that difference rather than attributing it to masks.
+
+Use independent critics per training run with identical architecture and initialization rules. Do not share a live critic across diverging treatment runs. During paired diagnostics, however, freeze and share advantage values to isolate the score intervention.
+
+Each seed block starts all four arms from the same compatible pretrained checkpoint and seed mapping. Random streams provide variance reduction at initialization; once policies change, trajectories diverge. Do not claim identical training data across complete runs.
+
+FULL and BOTH have different score dimensionality. This is part of the intervention, but it can alter gradient norms and clipping frequency. Keep the primary learning-rate schedule shared within each pair; use an equal-budget, development-only learning-rate sensitivity analysis if needed. Report any secondary treatment-specific tuning separately and do not replace the primary result with the best selectively tuned arm.
+
+#### E2. Task organization and run count
+
+The default is **one multitask policy per suite**, with tasks sampled uniformly unless a predeclared alternative is justified. Use LIBERO-Object and LIBERO-Spatial, three independent training seeds and the four arms: $4\times2\times3=24$ RL runs. Verify that the common SFT initialization is competent across the chosen suite before beginning RL.
+
+This count does not describe one policy per task. If separate task policies are necessary, the count becomes $4S\sum_s T_s$, where $S$ is the seed count and $T_s$ the number of tasks in suite $s$. Explicitly revise the budget before that change; do not silently call many per-task trainings one suite run.
+
+No-RL evaluation uses the common checkpoint and needs no RL training run. Continued SFT is a distinct training control, using only the fixed demonstration split and a declared update/compute budget; it is not interaction-matched online RL. If replicated at the same suite/seed structure it adds six runs to the three-seed design. Any required initial suite adaptation, tuning pilots and diagnostic branches are additional work.
+
+#### E3. Rollouts, rewards and episode boundaries
+
+Use the benchmark's documented task success signal and a fixed reward convention. Do not introduce shaping selectively to rescue one treatment. Balance task sampling and report actual primitive interactions per task.
+
+Let $L_t$ be the number of environment steps actually executed in a chunk. Under primitive-step discounting use
+
+$$
+r_t^{\mathrm{chunk}}=\sum_{i=0}^{L_t-1}\gamma^i r_{t+i},\qquad
+\delta_t=r_t^{\mathrm{chunk}}+\gamma^{L_t}(1-d_t)V(o_{t+1})-V(o_t),
+$$
+
+where $d_t$ marks genuine termination, not automatically a time-limit truncation. Define whether GAE's $\lambda$ is per decision or per primitive step: use $\gamma^{L_t}\lambda$ for the former and $(\gamma\lambda)^{L_t}$ for the latter in the trace recursion. Neither convention should change between arms.
+
+For the primary fixed-horizon mask, retain the planned prefix $h$ even if success terminates execution early; log $L_t$ for returns and discounts. A hindsight mask that removes coordinates after observed termination is a stopping-time intervention and needs separate justification. Set episode lengths/horizon handling consistently and identify administrative truncations. Do not discard short successful episodes or failed training runs.
+
+#### E4. Tuning and budget freeze
+
+Run a small development pilot for both samplers and both masks. Its purpose is correctness, memory, throughput and basic learnability, not selecting the winning scientific result. Register the number of pilot configurations and their resource cap before tuning. Exclude pilot seeds and reset pools from final evaluation.
+
+After profiling, freeze the primitive-interaction budget $B$ per training run, total rollout batch size, minibatch size, optimizer epochs and evaluation checkpoints. Choose the largest common batch configuration that fits both arms of each sampler pair, using accumulation if necessary. Do not compare arms at different interaction counts solely because one is faster.
+
+If the summed FULL ratio is unusably unstable, record that outcome. Lowering the common learning rate or update epochs is an explicit pilot revision applied to both paired arms. Switching to mean log-probabilities is a new objective, not a numerical fix that preserves the experiment.
+
+### 9. Evaluation, uncertainty and decision rules
+
+The primary endpoint remains the suite-balanced **ODE deployment success at the fixed final interaction budget $B$**. Stochastic-sampler success is a key secondary endpoint because it is closer to the training objective. An improvement in one deployment mode must not be described as an improvement in both.
+
+Proposed evaluation schedule: initial checkpoint and five evenly spaced interaction checkpoints through $B$. Use a fixed, disjoint development pool during training. Run final evaluation on a held-out reset-state pool with a predeclared episode count; an initial allocation is 50 episodes per task and deployment mode, increased uniformly if pilot binomial uncertainty is too large for the desired resolution. Task repetitions improve evaluation precision, not the number of independent trained policies. Use multiple initial sampler noises where stochasticity remains, paired across arms when meaningful.
+
+Evaluate the final checkpoint as the primary result. A best-development-checkpoint analysis may be secondary if selection uses only development data. Do not select the checkpoint on final test success. Record exact simulator states and random seeds rather than assuming different seed labels guarantee disjoint resets.
+
+Report:
+
+- Per-task, per-seed and suite-macro-average success; avoid allowing longer tasks or more episodes to silently reweight the suite.
+- Learning-curve area on a common interaction axis, stochastic versus ODE deployment gap, and failure/termination distributions.
+- Gradient disagreement, empirical variance, clipping fractions and mean/scale-network diagnostics, clearly labeled by estimator and dataset.
+- Peak allocated/reserved GPU memory, CPU utilization, rollout and update times, environment steps per second, evaluation overhead, GPU-hours and elapsed wall time.
+- If measuring control latency: time to first action, amortized latency per action and tail latency with the same synchronization and batching assumptions. Do not interpret throughput as reaction latency.
+
+For each suite and seed block, compute FULL-minus-BOTH success within Flow-Noise and within Flow-SDE. Their difference is the sampler-by-mask interaction. Report paired effects and all seed values. With only three training seeds, intervals and variance estimates are fragile: treat this as a pilot-scale workshop design, not a guarantee of statistical power. Increase to five seeds if feasible before drawing strong interaction claims.
+
+For aggregate uncertainty, preserve pairing and resample at the training-seed level; task resampling is appropriate only for an explicitly stated task-population claim and must preserve within-policy dependence. Report finite-suite results separately from generalization claims. Avoid treating hundreds of evaluation episodes as hundreds of independent policy replications. For many secondary comparisons, predeclare a multiplicity correction or label them exploratory.
+
+Use a practical effect threshold selected from development-only precision/budget analysis. A nonsignificant result is not equivalence. Claim a negligible effect only when uncertainty is narrow enough relative to that threshold. Publish all scheduled outcomes, including regressions and nulls.
+
+### 10. Resources, scheduling and execution milestones
+
+Plan for two GPUs with 48 GB each, with one independent training run per GPU if profiling confirms fit. This is a capacity target, not a claim that a specific untested configuration fits. Two GPU memories do not automatically form a single 96 GB address space. Record the actual GPU model; L40 and RTX 6000 configurations require separate timing measurements.
+
+Request an initial 48-hour machine slot for environment setup, reference rescoring, checkpoint diagnostics and short training pilots. It is an allocation proposal, not a promise that every prerequisite can be finished in 48 hours. Stop the pilot when correctness blocks are found rather than spending the remaining slot on uninterpretable runs. Size CPU workers, RAM and rendering processes from observed utilization; simulator throughput may limit the benefit of extra learner compute.
+
+Estimate total resources from measurements:
+
+$$
+G_{\mathrm{total}}=G_{\mathrm{setup/pilot}}+\sum_{r=1}^{N_{\mathrm{runs}}}g_r t_r+G_{\mathrm{controls}}+G_{\mathrm{evaluation}}+G_{\mathrm{reruns}},
+$$
+
+where $g_r$ is GPUs used by run $r$ and $t_r$ its hours, with no double counting when evaluation is already included in a run. Two concurrent single-GPU runs yield an ideal training makespan of roughly half their summed hours; CPU contention, unequal runtimes and downtime reduce this ideal efficiency. Freeze a resource ceiling and prioritize valid primary runs over optional architecture experiments.
+
+| Milestone | Work and deliverable | Exit criterion | Compute category |
+|---|---|---|---|
+| M0 — contract | Version manifest, task organization, parameter list, scorer specification and split files. | All four arms defined; 24-run assumption confirmed. | CPU and setup access. |
+| M1 — analytical controls | Scalar reference and new multi-step latent tests; reference-gradient and mask tables. | Gate B passes; failures understood. | CPU; no large-model training. |
+| M2 — sampler correctness | Rescoring, boundary and gradient tests for both implementations. | Gate A passes. | Small GPU batches. |
+| M3 — checkpoint audit | Mean/scale dependency maps and temporal/dimension mask classification. | Gate C classification completed. | One GPU initially. |
+| M4 — gradient pilot | Matched-batch estimates, clipping probes and horizon sweep. | Gate D passes or question is explicitly revised. | One GPU plus simulator CPU. |
+| M5 — feasibility/tuning | Short runs for four arms; throughput and memory report; frozen $B$ and hyperparameters. | Common viable settings and resource ceiling approved within project scope. | Up to two GPUs. |
+| M6 — primary campaign | 24 RL runs plus declared controls; immutable manifests and logs. | All runs accounted for, including failures. | Two independent single-GPU jobs where feasible. |
+| M7 — held-out evaluation | Final checkpoints, paired test states and both deployment modes. | Evaluation integrity checks pass. | GPUs and simulator CPU. |
+| M8 — analysis/write-up | Effect tables, uncertainty, mechanism plots, limitations and reproducibility package. | Claims supported by the evidence level actually obtained. | Primarily CPU. |
+
+M1 can proceed before the large-model environment is ready. M3 requires a correct sampler; M6 requires successful mechanism/feasibility gates. No calendar completion date is assumed until M5 supplies measured throughput.
+
+### 11. Reproducibility package and failure policy
+
+Deliver versioned configurations, setup instructions, environment/checkpoint hashes, test commands, reset-state splits, per-run seeds, raw metrics and analysis scripts. Keep task-specific latent buffers only as long as needed for diagnostics; record storage dtype/compression so rescoring is reproducible. Avoid storing every full latent trajectory for every long training run without a storage budget.
+
+Each run records sampler/mask IDs, parent checkpoint, trainable modules, task distribution, effective batch sizes, interactions, optimizer steps, wall time and all failures. Save resumable optimizer/critic/RNG state. Treat infrastructure interruption separately from numerical divergence. Rerun infrastructure failures with the same configuration and seed while retaining incident logs. Do not repeatedly restart diverging arms until a favorable seed appears; configuration changes create a new experiment version.
+
+Required figures are a causal dependency schematic, toy bias/variance curves, checkpoint sensitivity summaries, per-mask gradient diagnostics, learning curves with seed dispersion, and final paired success effects. Include the negative controls prominently.
+
+The existing `checks/proposal_math.py` covers only the earlier analytical examples. The new multi-step model, model audits and training pipeline described here remain to be implemented and tested. The plan must never cite those future checks as completed evidence.
+
+### 12. Scope boundary for Streaming Flow Policy reuse
+
+The borrowed motivation is the distinction between executed coordinates and auxiliary state; credit the source whenever the diagnostic is introduced. The proposed stochastic linear model and its RL tests are our planned adaptation. A deterministic flow with initial noise is not a chain of nondegenerate Gaussian transitions. Do not attach Gaussian score terms to deterministic transitions or claim that their omission proves a bug in Streaming Flow Policy.
+
+Streaming action-head replacement, stabilization-objective changes, correlated-noise exploration, hybrid deterministic/stochastic samplers and a second backbone are optional follow-up projects. Each changes additional mechanisms or requires additional theory. The primary campaign remains the four-arm SmolVLA experiment above.
+
 
 ## Expected contributions and success criteria
 
