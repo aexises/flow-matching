@@ -10,7 +10,7 @@ Planned work:
 - Analyze masking validity and measure gradient bias and variance.
 - Compare full-path and masked likelihoods in simulation using LIBERO.
 
-**Scope:** simulation only, with a planned budget of two NVIDIA L40 GPUs and an ICRA workshop submission target.
+**Scope:** simulation only, targeting an ICRA workshop submission. The current execution target is VeRLab proc6, beginning with CPU controls and sequential diagnostics on one allocated GPU. Hardware availability and memory fit require preflight; the full training campaign depends on measured resource costs.
 
 **Status:** proposal stage. SmolVLA training and evaluation experiments have not yet been run.
 

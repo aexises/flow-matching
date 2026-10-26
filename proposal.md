@@ -142,7 +142,7 @@ Dropping the score of $U$ and rescoring only $p(Y\mid U)$ with stored $U$ detach
 
 ## Experimental methodology and execution plan
 
-**Protocol revision: 23 October 2026.** This is a prospective protocol, not a report of completed robot experiments. Existing numerical checks validate limited analytical examples only. The streaming-policy connection motivates additional diagnostics; the primary experiment remains a fixed-sampler comparison of likelihood treatments on SmolVLA. Proposed numerical settings below are starting settings to be finalized on development data, not measured resource requirements or literature-established optima.
+**Protocol revision: 26 October 2026.** This is a prospective protocol, not a report of completed robot experiments. Existing numerical checks validate limited analytical examples only. The streaming-policy connection motivates additional diagnostics; the primary experiment remains a fixed-sampler comparison of likelihood treatments on SmolVLA. Proposed numerical settings below are design choices, not measured resource requirements or literature-established optima. Development-only changes must be recorded before freezing the confirmatory configuration; confirmatory sample counts must not be extended in response to interim significance.
 
 ### 1. Questions, hypotheses, and units of evidence
 
@@ -170,9 +170,25 @@ Create a versioned configuration manifest before any confirmatory run:
 - Simulator task lists, reward definition, reset-state pools, episode limits, success predicate, discount convention and termination/truncation handling.
 - Independent random streams for model initialization, task/reset selection, sampler noise, action evaluation and minibatch shuffling.
 
-Use synchronous collection and a fixed planned execution horizon in the primary study. Disable asynchronous queues, dynamic horizons and parameter-dependent action filters unless they are explicitly modeled. Freeze normalization statistics and disable training-time dropout during likelihood rescoring, or account for the corresponding randomness in the policy definition. Trainable observation features must be recomputed for the current policy; an old cached feature is valid only when its producing modules are frozen.
+Use synchronous collection and a fixed planned execution horizon in the primary study. Disable asynchronous queues, dynamic horizons and parameter-dependent action filters unless they are explicitly modeled. Freeze normalization statistics. Use deterministic network evaluation, including disabled dropout and stochastic depth, during **both rollout collection and likelihood rescoring**; the declared sampler noise remains active. Evaluation mode does not disable autograd: enable gradients for the declared trainable parameters during rescoring. Disabling dropout only during rescoring does not reproduce a dropout-enabled behavior distribution. If network randomness is retained, explicitly include its law and realized variables in the augmented policy and validate that alternative before using it. Trainable observation features must be recomputed for the current policy; an old cached feature is valid only when its producing modules are frozen.
 
 Use the same trainable backbone subset in the two samplers wherever possible. Flow-Noise-specific scale parameters remain part of its declared policy, so cross-sampler differences cannot be attributed solely to the mathematical source of noise. The primary causal contrast is the likelihood intervention *within* each sampler.
+
+#### Contract status and launch requirements
+
+No checkpoint, LeRobot revision, stochastic sampler implementation, simulator environment or trainable-module list is pinned by this document yet. The earlier LeRobot source citation is architectural evidence, not an executable experiment lock. Do not fill missing values with assumed defaults or describe the contract as complete.
+
+| Contract artifact | Required contents before its gate |
+|---|---|
+| `model-lock` | Checkpoint ID, immutable revision, weight/configuration/normalization checksums; LeRobot and sampler commits, patch hash and applicable licenses. |
+| `sampler-spec` | Actual mean and scale equations at every integration index; stochastic/deterministic step map; exact sampling/rescoring floors; endpoint treatment; physical/padded dimensions and generated/executed horizons. |
+| `trainable-lock` | Exact parameter names, shapes, counts, optimizer groups, frozen modules and adapters; actor/critic architecture; collection/rescoring network modes and cache rules. |
+| `environment-lock` | Resolved package versions, simulator/task assets, preprocessing and action transforms, reset-state split hashes, actual host/GPU/driver, environment or container identity. |
+| `diagnostic-lock` | Fixed policy revision, context bank, contrasts, projection vectors, sample counts, practical thresholds, confidence procedure, seeds and compute ceiling. |
+
+These are required records to implement and populate, not files claimed to exist. M0 may first lock one sampler for Gates A–D. A second sampler needs its own complete lock and correctness checks before comparison. Toy controls may proceed independently; checkpoint probes require the first four records, and confirmatory gradient diagnostics additionally require `diagnostic-lock`. M6 requires both sampler locks, the full four-arm configuration and the measured campaign budget.
+
+For deterministic endpoints, explicitly choose and record either a justified mixed deterministic/stochastic estimator or a positive-variance research variant. Do not assign a Gaussian density to a deterministic transition. The variant changes sampling and must be applied identically within its FULL/BOTH pair; the released recipe remains a separately identified reference. A verbal promise to resolve endpoints later does not pass Gate A.
 
 ### 3. Define masks explicitly
 
@@ -206,6 +222,7 @@ Required checks before training:
 5. Confirm that mask changes alone leave sampled trajectories, executed commands, rewards and advantages unchanged in a fixed-batch diagnostic.
 6. Test $K=1$, $h=H$, $D=d$, short chunks, true termination, time-limit truncation, all-retained and all-omitted toy masks. Zero-variance transitions must be rejected by the Gaussian scorer, not made valid by a logging-only epsilon.
 7. Check that the variance floor used for sampling is exactly the one used for rescoring. A changed floor changes the sampler and must be logged as such.
+8. Check collection/rescoring network-mode parity and deterministic repeated mean/scale evaluations at fixed inputs. Test GAE separately on genuine termination, time-limit reset, an ordinary continuation, and a rollout-buffer cut without a reset; verify that autoreset observations never replace the final observation used for truncation bootstrapping.
 
 Start with tolerances around $10^{-10}$ for small float64 analytical checks. Set operational tolerances for float32/mixed precision from measured rescoring error and tensor dimension; do not apply a per-coordinate tolerance blindly to a long summed log-density. Run distribution/log-probability arithmetic in adequate precision and form ratios from log-ratios.
 
@@ -306,9 +323,19 @@ Use two diagnostic levels:
 
 For non-differentiable task success, simulator finite differences are not a cheap exact reference. If directional parameter perturbations are used, keep them development-only and report their sampling uncertainty and policy changes explicitly.
 
-Start with several independent batches per context/task stratum and increase samples until confidence intervals are informative or a predefined diagnostic budget is exhausted. Use context/episode clustering as appropriate. Report contributions by denoising step, mask component and parameter group, before and after optimizer gradient clipping. Full parameter vectors may be expensive: accumulate groupwise differences and fixed random projections, explicitly noting that projections cannot establish absence of all bias directions.
+Use development-only batches to profile cost and choose the frozen confirmatory design below. Report contributions by denoising step, mask component and parameter group, before and after optimizer gradient clipping. Full parameter vectors may be expensive: accumulate groupwise differences and fixed random projections, explicitly noting that projections cannot establish absence of all bias directions.
 
-A null result with a wide interval is inconclusive. Define a practical resolution threshold from pilot gradient variability and optimizer update scales, freeze it before confirmatory diagnostics, and report whether the interval excludes effects of that size.
+**Fixed-sample confirmatory diagnostic design:**
+
+- Primary mask contrast: BOTH minus FULL at the frozen policy, default execution horizon and summed-path scoring. DIM, TIME, FINAL, stepwise and parameter-group analyses remain exploratory unless separately registered. No mask-dependent rollout or advantage changes are allowed.
+- Primary scalar summaries: four unit-normalized Rademacher directions over the concatenated trainable actor parameters of each sampler. Generate them with seed `26026`, archive their values or a reproducible streamed representation and parameter ordering, and fix them before seeing confirmatory gradients. Project the *paired gradient difference*, not each estimator onto a separately chosen direction. These directions are coordinate-dependent diagnostics, not exhaustive tests of the gradient vector; groupwise and development-gradient-aligned summaries may be reported as exploratory.
+- Fixed-context level: freeze the 128-context development bank and collect 32 independent replicate blocks. Each block contains one fresh latent trajectory per context, with independent noise across contexts and blocks. Compute a bank-average paired projected difference per block: 4,096 trajectories per sampler. Contexts are held fixed, so inference concerns the average conditional effect on this bank, not a population of unseen observations. Use identical samples across masks within a block.
+- Task-relevance level: collect 32 independent replicate blocks, each containing one fresh episode for every selected task. Average task-balanced, within-episode return-weighted score contributions into one paired projected difference per block. With 20 tasks across the two proposed suites this is 640 episodes per sampler. Freeze task weights, return weighting and baseline before collection. Different chunks from one episode are not independent replications. Approximate-GAE analyses retain the surrogate-disagreement label.
+- Uncertainty: for each scalar contrast, compute a two-sided Student-t interval from the 32 independent block means with 31 degrees of freedom. This is an approximate finite-variance inference procedure, not an exact guarantee for heavy-tailed scores. For each diagnostic level separately, reserve a family of eight primary contrasts: four directions in each of two samplers. Use Bonferroni intervals with critical quantile $t_{31,1-0.05/(2\cdot8)}$, including when only the first sampler is run initially. Report block values, dispersion and nonfinite events; if heavy tails or invalid blocks undermine the interval, label inference inconclusive rather than silently trimming data or changing methods after inspection.
+- Practical resolution: for each direction, propose a threshold of 5% of the development-only RMS block-level projected FULL gradient, using the same block definition. Record both that value and its projected update under the declared optimizer state/learning rate; freeze the numerical threshold before confirmatory collection. This is a design convention, not an established meaningful-effect scale. If the reference RMS is zero, numerically unresolved or yields an irrelevant update scale, select and justify an absolute threshold on separate development data before the lock; otherwise no negligible-effect claim is allowed.
+- Decision and stopping: collect exactly the locked counts and inspect inferential outcomes once at the end. An interval excluding zero supports a nonzero projected effect; an interval wholly outside the practical band supports an effect larger than the threshold; an interval wholly inside the band supports only a small effect in that specified projection and setting. Other outcomes are inconclusive. Do not infer global absence of bias from four projections. Stop early only for correctness, nonfinite values, infrastructure failure or the frozen resource ceiling, recording the incomplete result without a significance decision. Do not add samples because an interval nearly excludes zero. A larger or changed design is a new registered experiment with independent data and an updated comparison family.
+
+The counts above are prospective caps, not evidence that proc6 can finish them in the initial slot. If profiling shows they exceed the available budget, reduce coverage or choose a different fixed design on development data *before* confirmation and record the change. Require adequate coverage and independent blocks; do not silently retain the same scientific claim after reducing the design. An effect on the diagnostic reward alone does not establish a task-relevant gradient effect.
 
 #### D2. Probe clipping without conflating it with score bias
 
@@ -364,7 +391,28 @@ r_t^{\mathrm{chunk}}=\sum_{i=0}^{L_t-1}\gamma^i r_{t+i},\qquad
 \delta_t=r_t^{\mathrm{chunk}}+\gamma^{L_t}(1-d_t)V(o_{t+1})-V(o_t),
 $$
 
-where $d_t$ marks genuine termination, not automatically a time-limit truncation. Define whether GAE's $\lambda$ is per decision or per primitive step: use $\gamma^{L_t}\lambda$ for the former and $(\gamma\lambda)^{L_t}$ for the latter in the trace recursion. Neither convention should change between arms.
+where $d_t$ marks genuine termination, not automatically a time-limit truncation. Here $o_{t+1}$ denotes the successor observation *before any environment reset*. At a time limit that permits bootstrapping, use its recorded final observation, never the next episode's autoreset observation. If the limit is part of the finite-horizon task objective, treat it as a terminal boundary instead and record the corresponding time-aware objective/value inputs.
+
+Bootstrapping and trace continuation use separate masks. Let $b_t=1-d_t$ for the bootstrap convention above, and let $c_t=1$ only when the next stored decision belongs to the same episode and its advantage is available. Define
+
+$$
+\widehat A_t=\delta_t+c_t\eta_t\widehat A_{t+1},\qquad
+\eta_t=\begin{cases}
+\gamma^{L_t}\lambda,&\lambda\text{ per chunk decision},\\
+(\gamma\lambda)^{L_t},&\lambda\text{ decayed per primitive step}.
+\end{cases}
+$$
+
+The primary choice is per-decision $\lambda$; freeze its value in the configuration. The second option defines an alternative chunk-boundary trace convention, not a claim of equivalence to primitive-step GAE with intermediate value estimates. Neither convention should change between arms.
+
+| Boundary | Bootstrap mask $b_t$ | Trace mask $c_t$ |
+|---|---|---|
+| Ordinary transition with next advantage available | 1 | 1 |
+| Genuine termination/reset | 0 | 0 |
+| Time-limit truncation/reset with continuing-task bootstrap | 1, using final pre-reset observation | 0 |
+| Rollout-buffer cut without reset | 1 | 0 for a locally truncated trace, or continue only with a correctly linked next segment |
+
+Thus a truncated episode may bootstrap while its advantage trace still stops before the next episode. Log both masks, boundary causes, final observations and $L_t$; missing final observations block the intended truncation-bootstrap calculation.
 
 For the primary fixed-horizon mask, retain the planned prefix $h$ even if success terminates execution early; log $L_t$ for returns and discounts. A hindsight mask that removes coordinates after observed termination is a stopping-time intervention and needs separate justification. Set episode lengths/horizon handling consistently and identify administrative truncations. Do not discard short successful episodes or failed training runs.
 
@@ -396,11 +444,13 @@ For each suite and seed block, compute FULL-minus-BOTH success within Flow-Noise
 
 For aggregate uncertainty, preserve pairing and resample at the training-seed level; task resampling is appropriate only for an explicitly stated task-population claim and must preserve within-policy dependence. Report finite-suite results separately from generalization claims. Avoid treating hundreds of evaluation episodes as hundreds of independent policy replications. For many secondary comparisons, predeclare a multiplicity correction or label them exploratory.
 
-Use a practical effect threshold selected from development-only precision/budget analysis. A nonsignificant result is not equivalence. Claim a negligible effect only when uncertainty is narrow enough relative to that threshold. Publish all scheduled outcomes, including regressions and nulls.
+Before primary training, freeze a practical success-effect band of $\pm5$ percentage points for the within-sampler FULL-minus-BOTH contrasts, or record a justified replacement based solely on development precision and scientific relevance. Freeze the final episode count from development-only precision/budget analysis before held-out evaluation; do not increase it after seeing final treatment effects. The gradient-projection bands in D1 use different units and do not establish task-success equivalence. A nonsignificant result is not equivalence. Claim a negligible effect only when the corresponding uncertainty is narrow enough relative to the frozen band; with three training seeds this may remain unresolved. Publish all scheduled outcomes, including regressions and nulls.
 
 ### 10. Resources, scheduling and execution milestones
 
-Plan for two GPUs with 48 GB each, with one independent training run per GPU if profiling confirms fit. This is a capacity target, not a claim that a specific untested configuration fits. Two GPU memories do not automatically form a single 96 GB address space. Record the actual GPU model; L40 and RTX 6000 configurations require separate timing measurements.
+The current execution target is **VeRLab proc6**, replacing the earlier two-48-GB-GPU assumption. Earlier setup records identify two RTX 4090 GPUs; verify actual model, per-device memory, ownership/reservation, free VRAM, driver, local scratch space and rootless Docker/CUDA/EGL operation on the day of execution. These records do not establish current availability or sampler compatibility. Treat memory as a per-device limit and do not assume that two cards provide one pooled allocation.
+
+Begin with CPU analytical controls and one reserved GPU for one pinned sampler's correctness, dependency and gradient diagnostics. Process observations, denoising steps and probe directions sequentially; profile the derivative path as well as inference. Use smaller microbatches and accumulation where they preserve the declared estimator. A second GPU may accelerate independent work only if allocated and profiling confirms fit; do not assume that inference fit establishes actor/critic/update fit. If a valid configuration cannot fit, document that blocker and revise resources or the declared trainable configuration before continuing.
 
 Request an initial 48-hour machine slot for environment setup, reference rescoring, checkpoint diagnostics and short training pilots. It is an allocation proposal, not a promise that every prerequisite can be finished in 48 hours. Stop the pilot when correctness blocks are found rather than spending the remaining slot on uninterpretable runs. Size CPU workers, RAM and rendering processes from observed utilization; simulator throughput may limit the benefit of extra learner compute.
 
@@ -410,21 +460,21 @@ $$
 G_{\mathrm{total}}=G_{\mathrm{setup/pilot}}+\sum_{r=1}^{N_{\mathrm{runs}}}g_r t_r+G_{\mathrm{controls}}+G_{\mathrm{evaluation}}+G_{\mathrm{reruns}},
 $$
 
-where $g_r$ is GPUs used by run $r$ and $t_r$ its hours, with no double counting when evaluation is already included in a run. Two concurrent single-GPU runs yield an ideal training makespan of roughly half their summed hours; CPU contention, unequal runtimes and downtime reduce this ideal efficiency. Freeze a resource ceiling and prioritize valid primary runs over optional architecture experiments.
+where $g_r$ is GPUs used by run $r$ and $t_r$ its hours, with no double counting when evaluation is already included in a run. Only if two independent single-GPU runs both fit and both GPUs are allocated does the ideal training makespan approach half their summed hours; CPU contention, unequal runtimes and downtime reduce this ideal efficiency. The 24-run factorial remains a conditional campaign design, not a booked proc6 workload. Before M6, record measured per-arm GPU-hours, peak memory, simulator/evaluation overhead and a numerical total resource ceiling. If the campaign exceeds it, publish a revised scope before training rather than dropping inconvenient arms or seeds afterward.
 
 | Milestone | Work and deliverable | Exit criterion | Compute category |
 |---|---|---|---|
-| M0 — contract | Version manifest, task organization, parameter list, scorer specification and split files. | All four arms defined; 24-run assumption confirmed. | CPU and setup access. |
+| M0 — contract | Populate model/sampler/trainable/environment locks for the first sampler; define task organization and split files. | First-sampler records complete; second sampler and campaign remain explicitly pending. | CPU and setup access. |
 | M1 — analytical controls | Scalar reference and new multi-step latent tests; reference-gradient and mask tables. | Gate B passes; failures understood. | CPU; no large-model training. |
-| M2 — sampler correctness | Rescoring, boundary and gradient tests for both implementations. | Gate A passes. | Small GPU batches. |
+| M2 — sampler correctness | Rescoring, network-mode, episode-boundary and gradient tests for the first implementation; repeat before admitting the second. | Gate A passes separately for each admitted sampler. | One GPU, small batches. |
 | M3 — checkpoint audit | Mean/scale dependency maps and temporal/dimension mask classification. | Gate C classification completed. | One GPU initially. |
-| M4 — gradient pilot | Matched-batch estimates, clipping probes and horizon sweep. | Gate D passes or question is explicitly revised. | One GPU plus simulator CPU. |
-| M5 — feasibility/tuning | Short runs for four arms; throughput and memory report; frozen $B$ and hyperparameters. | Common viable settings and resource ceiling approved within project scope. | Up to two GPUs. |
-| M6 — primary campaign | 24 RL runs plus declared controls; immutable manifests and logs. | All runs accounted for, including failures. | Two independent single-GPU jobs where feasible. |
+| M4 — gradient diagnostics | Development pilot, frozen diagnostic lock, fixed-sample paired estimates, clipping probes and exploratory horizon sweep. | Gate D passes or question is explicitly revised; incomplete counts remain inconclusive. | One GPU plus simulator CPU. |
+| M5 — feasibility/tuning | Short runs for four arms; complete both sampler locks; freeze $B$, hyperparameters, success-effect band and evaluation counts. | All four arms fit; measured campaign cost fits a numerical resource ceiling. | One GPU initially; second only if allocated. |
+| M6 — conditional primary campaign | 24 RL runs plus declared controls, or a prospectively documented revised design; immutable manifests and logs. | All scheduled runs accounted for, including failures. | Sequential jobs; two independent single-GPU jobs only where feasible and allocated. |
 | M7 — held-out evaluation | Final checkpoints, paired test states and both deployment modes. | Evaluation integrity checks pass. | GPUs and simulator CPU. |
 | M8 — analysis/write-up | Effect tables, uncertainty, mechanism plots, limitations and reproducibility package. | Claims supported by the evidence level actually obtained. | Primarily CPU. |
 
-M1 can proceed before the large-model environment is ready. M3 requires a correct sampler; M6 requires successful mechanism/feasibility gates. No calendar completion date is assumed until M5 supplies measured throughput.
+M1 can proceed before the large-model environment is ready. Complete M2–M4 for the first pinned sampler before expanding to the second. M3 requires a correct sampler; M6 requires successful mechanism/feasibility gates and both locked sampler pairs. No calendar completion date is assumed until M5 supplies measured throughput.
 
 ### 11. Reproducibility package and failure policy
 
